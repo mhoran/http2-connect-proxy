@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -60,8 +61,15 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 
 // what happens if IP changes?
 func main() {
-	flag.BoolVar(&debug, "debug", false, "debug logging")
+	flag.BoolVar(&debug, "debug", false, "enable debug logging")
+	var backend string
+	flag.StringVar(&backend, "backend", "", "URL to Envoy proxy (required)")
 	flag.Parse()
+
+	if backend == "" {
+		fmt.Println("-backend flag is required")
+		os.Exit(1)
+	}
 
 	dial := func(network, addr string, cfg *tls.Config) (net.Conn, error) {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
@@ -90,7 +98,7 @@ func main() {
 		go func() {
 			pr, pw := io.Pipe()
 
-			url, err := url.Parse("https://mysql.example.com:10001")
+			url, err := url.Parse(backend)
 			if err != nil {
 				log.Fatal(err)
 			}
