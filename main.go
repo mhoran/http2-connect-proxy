@@ -58,6 +58,24 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+func getLocalIP(host string) net.IP {
+	conn, err := net.Dial("udp", host)
+	defer conn.Close()
+	if err != nil {
+		return nil
+	}
+	if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return localAddr.IP
+	}
+	return nil
+}
+
+func getRemotePort(conn net.Conn) int {
+	if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		return addr.Port
+	}
+	return 0
+}
 
 func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
@@ -122,9 +140,12 @@ func main() {
 				return
 			}
 
+			var localIP = getLocalIP(url.Host)
+			var remotePort = getRemotePort(conn)
+
 			// FIXME: remove when Envoy supports PROXY header
-			if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-				fmt.Fprintf(pw, "PROXY TCP4 127.0.0.1 127.0.0.1 %v 3306\r\n", addr.Port)
+			if localIP != nil && remotePort != 0 {
+				fmt.Fprintf(pw, "PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
 			}
 
 			go func() {
