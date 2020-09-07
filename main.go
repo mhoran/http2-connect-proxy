@@ -70,6 +70,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	url, err := url.Parse(backend)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	dial := func(network, addr string, cfg *tls.Config) (net.Conn, error) {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		conn, err := tls.DialWithDialer(dialer, network, addr, cfg)
@@ -97,10 +102,6 @@ func main() {
 		go func() {
 			pr, pw := io.Pipe()
 
-			url, err := url.Parse(backend)
-			if err != nil {
-				log.Fatal(err)
-			}
 			req := &http.Request{
 				Method: "CONNECT",
 				URL:    url,
