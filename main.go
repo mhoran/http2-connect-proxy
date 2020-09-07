@@ -14,6 +14,31 @@ import (
 	"golang.org/x/net/http2"
 )
 
+func WrapConnection(c net.Conn) net.Conn {
+	return &spyConnection{
+		Conn: c,
+	}
+}
+
+type spyConnection struct {
+	net.Conn
+}
+
+func (sc *spyConnection) Read(b []byte) (int, error) {
+	n, err := sc.Conn.Read(b)
+	if err != nil {
+		return n, err
+	}
+	log.Printf("Read %d bytes from proxy", n)
+	return n, nil
+}
+
+func (sc *spyConnection) Write(b []byte) (int, error) {
+	n := len(b)
+	log.Printf("Wrote %d bytes to proxy", n)
+	return sc.Conn.Write(b)
+}
+
 type WriteCounter struct {
 	Message string
 }
@@ -24,13 +49,17 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// what happens if IP changes?
 func main() {
-	tr := &http2.Transport{
-		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 5 * time.Second}
-			return tls.DialWithDialer(dialer, network, addr, cfg)
-		},
+	dial := func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		conn, err := tls.DialWithDialer(dialer, network, addr, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return WrapConnection(conn), nil
 	}
+	tr := &http2.Transport{DialTLS: dial}
 	//c := &http.Client{Transport: transport}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:3306")
