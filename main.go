@@ -58,6 +58,7 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
 func getLocalIP(host string) net.IP {
 	conn, err := net.Dial("udp", host)
 	defer conn.Close()
@@ -75,6 +76,52 @@ func getRemotePort(conn net.Conn) int {
 		return addr.Port
 	}
 	return 0
+}
+
+func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
+	pr, pw := io.Pipe()
+
+	req := &http.Request{
+		Method: "CONNECT",
+		URL:    url,
+		Host:   "127.0.0.1:3306",
+		Body:   ioutil.NopCloser(pr),
+	}
+
+	// Send the request
+	//res, err := c.Do(req)
+	res, err := tr.RoundTrip(req)
+	if err != nil {
+		log.Printf("Error in tr.RoundTrip: %v", err)
+		conn.Close()
+		return
+	}
+	if res.StatusCode != 200 {
+		conn.Close()
+		return
+	}
+
+	var localIP = getLocalIP(url.Host)
+	var remotePort = getRemotePort(conn)
+
+	// FIXME: remove when Envoy supports PROXY header
+	if localIP != nil && remotePort != 0 {
+		fmt.Fprintf(pw, "PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
+	}
+
+	go func() {
+		src := io.TeeReader(res.Body, &WriteCounter{
+			Message: "Wrote %d bytes to client\n",
+		})
+		io.Copy(conn, src)
+
+		conn.Close()
+	}()
+	src := io.TeeReader(conn, &WriteCounter{
+		Message: "Read %d bytes from client\n",
+	})
+	io.Copy(pw, src)
+	pw.Close()
 }
 
 func main() {
@@ -117,51 +164,7 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Printf("Client connected: %v\n", conn.RemoteAddr().String())
-		go func() {
-			pr, pw := io.Pipe()
-
-			req := &http.Request{
-				Method: "CONNECT",
-				URL:    url,
-				Host:   "127.0.0.1:3306",
-				Body:   ioutil.NopCloser(pr),
-			}
-
-			// Send the request
-			//res, err := c.Do(req)
-			res, err := tr.RoundTrip(req)
-			if err != nil {
-				log.Printf("Error in tr.RoundTrip: %v", err)
-				conn.Close()
-				return
-			}
-			if res.StatusCode != 200 {
-				conn.Close()
-				return
-			}
-
-			var localIP = getLocalIP(url.Host)
-			var remotePort = getRemotePort(conn)
-
-			// FIXME: remove when Envoy supports PROXY header
-			if localIP != nil && remotePort != 0 {
-				fmt.Fprintf(pw, "PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
-			}
-
-			go func() {
-				src := io.TeeReader(res.Body, &WriteCounter{
-					Message: "Wrote %d bytes to client\n",
-				})
-				io.Copy(conn, src)
-
-				conn.Close()
-			}()
-			src := io.TeeReader(conn, &WriteCounter{
-				Message: "Read %d bytes from client\n",
-			})
-			io.Copy(pw, src)
-			pw.Close()
-		}()
+		go handleConnection(url, tr, conn)
 	}
 
 }
