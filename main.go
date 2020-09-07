@@ -59,7 +59,6 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// what happens if IP changes?
 func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
 	var backend string
@@ -79,7 +78,7 @@ func main() {
 		}
 		return WrapConnection(conn), nil
 	}
-	tr := &http2.Transport{DialTLS: dial}
+	tr := &http2.Transport{DialTLS: dial, ReadIdleTimeout: 60 * time.Second}
 	//c := &http.Client{Transport: transport}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:3306")
