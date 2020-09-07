@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,6 +14,8 @@ import (
 
 	"golang.org/x/net/http2"
 )
+
+var debug bool
 
 func WrapConnection(c net.Conn) net.Conn {
 	return &spyConnection{
@@ -29,13 +32,17 @@ func (sc *spyConnection) Read(b []byte) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	log.Printf("Read %d bytes from proxy", n)
+	if debug {
+		log.Printf("Read %d bytes from proxy", n)
+	}
 	return n, nil
 }
 
 func (sc *spyConnection) Write(b []byte) (int, error) {
 	n := len(b)
-	log.Printf("Wrote %d bytes to proxy", n)
+	if debug {
+		log.Printf("Wrote %d bytes to proxy", n)
+	}
 	return sc.Conn.Write(b)
 }
 
@@ -45,12 +52,17 @@ type WriteCounter struct {
 
 func (wc *WriteCounter) Write(p []byte) (int, error) {
 	n := len(p)
-	log.Printf(wc.Message, n)
+	if debug {
+		log.Printf(wc.Message, n)
+	}
 	return n, nil
 }
 
 // what happens if IP changes?
 func main() {
+	flag.BoolVar(&debug, "debug", false, "debug logging")
+	flag.Parse()
+
 	dial := func(network, addr string, cfg *tls.Config) (net.Conn, error) {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		conn, err := tls.DialWithDialer(dialer, network, addr, cfg)
@@ -113,14 +125,12 @@ func main() {
 				})
 				io.Copy(conn, src)
 
-				log.Printf("Done io.Copy(conn, res.body)")
 				conn.Close()
 			}()
 			src := io.TeeReader(conn, &WriteCounter{
 				Message: "Read %d bytes from client\n",
 			})
 			io.Copy(pw, src)
-			log.Printf("Done io.Copy(pw, conn)")
 			pw.Close()
 		}()
 	}
