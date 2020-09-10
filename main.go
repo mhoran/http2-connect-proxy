@@ -122,6 +122,15 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	})
 	io.Copy(pw, src)
 	pw.Close()
+
+func addKeyLogWriter(cfg *tls.Config) {
+	fn := os.Getenv("SSLKEYLOGFILE")
+	if fn != "" {
+		w, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+		if err == nil {
+			cfg.KeyLogWriter = w
+		}
+	}
 }
 
 func main() {
@@ -142,6 +151,7 @@ func main() {
 
 	dial := func(network, addr string, cfg *tls.Config) (net.Conn, error) {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		addKeyLogWriter(cfg)
 		conn, err := tls.DialWithDialer(dialer, network, addr, cfg)
 		if err != nil {
 			return nil, err
