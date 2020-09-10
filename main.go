@@ -150,6 +150,7 @@ func main() {
 	}
 
 	dial := func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+		log.Printf("Connecting to %s\n", addr)
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
 		addKeyLogWriter(cfg)
 		conn, err := tls.DialWithDialer(dialer, network, addr, cfg)
