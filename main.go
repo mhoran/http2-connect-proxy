@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -79,6 +80,8 @@ func getRemotePort(conn net.Conn) int {
 }
 
 func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
+	defer conn.Close()
+
 	pr, pw := io.Pipe()
 
 	req := &http.Request{
@@ -93,11 +96,11 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		log.Printf("Error in tr.RoundTrip: %v", err)
-		conn.Close()
 		return
 	}
+	defer res.Body.Close()
+
 	if res.StatusCode != 200 {
-		conn.Close()
 		return
 	}
 
@@ -110,18 +113,34 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	}
 
 	go func() {
-		src := io.TeeReader(res.Body, &WriteCounter{
-			Message: "Wrote %d bytes to client\n",
+		defer pw.Close()
+		src := io.TeeReader(conn, &WriteCounter{
+			Message: "Read %d bytes from client\n",
 		})
-		io.Copy(conn, src)
-
-		conn.Close()
+		_, err = io.Copy(pw, src)
 	}()
-	src := io.TeeReader(conn, &WriteCounter{
-		Message: "Read %d bytes from client\n",
+
+	src := io.TeeReader(res.Body, &WriteCounter{
+		Message: "Wrote %d bytes from client\n",
 	})
-	io.Copy(pw, src)
-	pw.Close()
+	_, err = io.Copy(conn, src)
+	if err != nil {
+		if err := errors.Unwrap(err); err != nil {
+			switch err.(type) {
+			case http2.ConnectionError:
+			case http2.GoAwayError:
+			case http2.StreamError:
+				log.Printf("Got expected error: %v", err)
+				// Set SO_LINGER to 0 to send RST on conn.Close()
+				conn.(*net.TCPConn).SetLinger(0)
+			default:
+				log.Printf("Got unexpected error: %v", err)
+			}
+		} else {
+			log.Printf("Error in io.Copy(conn, res.Body): %v", err)
+		}
+	}
+}
 
 func addKeyLogWriter(cfg *tls.Config) {
 	fn := os.Getenv("SSLKEYLOGFILE")
