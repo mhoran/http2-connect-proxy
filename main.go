@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -80,15 +79,28 @@ func getRemotePort(conn net.Conn) int {
 }
 
 func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
-	defer conn.Close()
+	reset := false
+	defer func() {
+		if reset {
+			// Set SO_LINGER to 0 to send RST on conn.Close()
+			conn.(*net.TCPConn).SetLinger(0)
+		}
+		conn.Close()
+	}()
 
 	pr, pw := io.Pipe()
+	closePipe := true
+	defer func() {
+		if closePipe {
+			pw.Close()
+		}
+	}()
 
 	req := &http.Request{
 		Method: "CONNECT",
 		URL:    url,
 		Host:   "127.0.0.1:3306",
-		Body:   ioutil.NopCloser(pr),
+		Body:   pr,
 	}
 
 	// Send the request
@@ -96,11 +108,13 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		log.Printf("Error in tr.RoundTrip: %v", err)
+		reset = true
 		return
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
+		reset = true
 		return
 	}
 
@@ -109,9 +123,13 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 
 	// FIXME: remove when Envoy supports PROXY header
 	if localIP != nil && remotePort != 0 {
-		fmt.Fprintf(pw, "PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
+		_, err := fmt.Fprintf(pw, "PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
+		if err != nil {
+			return
+		}
 	}
 
+	closePipe = false
 	go func() {
 		defer pw.Close()
 		src := io.TeeReader(conn, &WriteCounter{
@@ -131,8 +149,7 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 			case http2.GoAwayError:
 			case http2.StreamError:
 				log.Printf("Got expected error: %v", err)
-				// Set SO_LINGER to 0 to send RST on conn.Close()
-				conn.(*net.TCPConn).SetLinger(0)
+				reset = true
 			default:
 				log.Printf("Got unexpected error: %v", err)
 			}
