@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,23 +117,30 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 		return
 	}
 
-	var localIP = getLocalIP(url.Host)
-	var remotePort = getRemotePort(conn)
-
-	// FIXME: remove when Envoy supports PROXY header
-	if localIP != nil && remotePort != 0 {
-		_, err := fmt.Fprintf(pw, "PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
-		if err != nil {
-			return
-		}
-	}
-
 	go func() {
 		defer closePipe.Do(func() { pw.Close() })
 		src := io.TeeReader(conn, &WriteCounter{
 			Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
 		})
-		_, err = io.Copy(pw, src)
+
+		// FIXME: remove when Envoy supports PROXY header
+		r := bufio.NewReader(src)
+
+		header := ""
+		localIP := getLocalIP(url.Host)
+		remotePort := getRemotePort(conn)
+
+		if localIP != nil && remotePort != 0 {
+			header = fmt.Sprintf("PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
+		}
+
+		// Block sending header until client sends data
+		_, err := r.Peek(1)
+		if err != nil {
+			return
+		}
+
+		io.Copy(pw, io.MultiReader(strings.NewReader(header), r))
 	}()
 
 	src := io.TeeReader(res.Body, &WriteCounter{
