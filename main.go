@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -19,7 +20,7 @@ import (
 	"golang.org/x/net/http2"
 )
 
-var debug bool
+var debugLog *log.Logger
 
 func WrapConnection(c net.Conn) net.Conn {
 	return &spyConnection{
@@ -36,17 +37,13 @@ func (sc *spyConnection) Read(b []byte) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	if debug {
-		log.Printf("Read %d bytes from proxy", n)
-	}
+	debugLog.Printf("Read %d bytes from proxy", n)
 	return n, nil
 }
 
 func (sc *spyConnection) Write(b []byte) (int, error) {
 	n := len(b)
-	if debug {
-		log.Printf("Wrote %d bytes to proxy", n)
-	}
+	debugLog.Printf("Wrote %d bytes to proxy", n)
 	return sc.Conn.Write(b)
 }
 
@@ -56,9 +53,7 @@ type WriteCounter struct {
 
 func (wc *WriteCounter) Write(p []byte) (int, error) {
 	n := len(p)
-	if debug {
-		log.Printf(wc.Message, n)
-	}
+	debugLog.Printf(wc.Message, n)
 	return n, nil
 }
 
@@ -170,6 +165,7 @@ func addKeyLogWriter(cfg *tls.Config) {
 }
 
 func main() {
+	var debug bool
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
 	var backend string
 	flag.StringVar(&backend, "backend", "", "URL to Envoy proxy (required)")
@@ -180,6 +176,12 @@ func main() {
 	if backend == "" {
 		fmt.Println("-backend flag is required")
 		os.Exit(1)
+	}
+
+	if debug {
+		debugLog = log.New(os.Stderr, log.Prefix(), log.Flags())
+	} else {
+		debugLog = log.New(ioutil.Discard, log.Prefix(), log.Flags())
 	}
 
 	url, err := url.Parse(backend)
