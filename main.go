@@ -176,6 +176,8 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
 	var backend string
 	flag.StringVar(&backend, "backend", "", "URL to Envoy proxy (required)")
+	var port string
+	flag.StringVar(&port, "port", "3306", "port to listen on")
 	flag.Parse()
 
 	if backend == "" {
@@ -201,12 +203,12 @@ func main() {
 	tr := &http2.Transport{DialTLS: dial, ReadIdleTimeout: 60 * time.Second}
 	//c := &http.Client{Transport: transport}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:3306")
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%s", port))
 	if err != nil {
 		// handle error
 		log.Fatal(err)
 	}
-	log.Println("Listening on 127.0.0.1:3306")
+	log.Printf("Listening on %v\n", ln.Addr().String())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
