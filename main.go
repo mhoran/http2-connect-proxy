@@ -133,28 +133,24 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	go func() {
 		defer pw.Close()
 		src := io.TeeReader(conn, &WriteCounter{
-			Message: "Read %d bytes from client\n",
+			Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
 		})
 		_, err = io.Copy(pw, src)
 	}()
 
 	src := io.TeeReader(res.Body, &WriteCounter{
-		Message: "Wrote %d bytes from client\n",
+		Message: fmt.Sprintf("Wrote %%d bytes to client %v\n", conn.RemoteAddr().String()),
 	})
 	_, err = io.Copy(conn, src)
 	if err != nil {
+		log.Printf("Client %v got error in io.Copy(conn, res.Body): %v", conn.RemoteAddr().String(), err)
 		if err := errors.Unwrap(err); err != nil {
 			switch err.(type) {
 			case http2.ConnectionError:
 			case http2.GoAwayError:
 			case http2.StreamError:
-				log.Printf("Got expected error: %v", err)
 				reset = true
-			default:
-				log.Printf("Got unexpected error: %v", err)
 			}
-		} else {
-			log.Printf("Error in io.Copy(conn, res.Body): %v", err)
 		}
 	}
 }
