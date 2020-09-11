@@ -143,8 +143,9 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	})
 	_, err = io.Copy(conn, src)
 	if err != nil {
-		log.Printf("Client %v got error in io.Copy(conn, res.Body): %v", conn.RemoteAddr().String(), err)
+		msg := err.Error()
 		if err := errors.Unwrap(err); err != nil {
+			msg = err.Error()
 			switch err.(type) {
 			case http2.ConnectionError:
 			case http2.GoAwayError:
@@ -152,6 +153,7 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 				reset = true
 			}
 		}
+		log.Printf("Client %v got error in io.Copy(conn, res.Body): %v", conn.RemoteAddr().String(), msg)
 	}
 }
 
