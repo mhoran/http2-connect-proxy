@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -89,12 +90,8 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	}()
 
 	pr, pw := io.Pipe()
-	closePipe := true
-	defer func() {
-		if closePipe {
-			pw.Close()
-		}
-	}()
+	var closePipe sync.Once
+	defer closePipe.Do(func() { pw.Close() })
 
 	req := &http.Request{
 		Method: "CONNECT",
@@ -129,9 +126,8 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 		}
 	}
 
-	closePipe = false
 	go func() {
-		defer pw.Close()
+		defer closePipe.Do(func() { pw.Close() })
 		src := io.TeeReader(conn, &WriteCounter{
 			Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
 		})
