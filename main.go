@@ -86,7 +86,9 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	defer func() {
 		if reset {
 			// Set SO_LINGER to 0 to send RST on conn.Close()
-			conn.(*net.TCPConn).SetLinger(0)
+			if conn, ok := conn.(*net.TCPConn); ok {
+				conn.SetLinger(0)
+			}
 		}
 		conn.Close()
 	}()
@@ -151,14 +153,9 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 		msg := err.Error()
 		if err := errors.Unwrap(err); err != nil {
 			msg = err.Error()
-			switch err.(type) {
-			case http2.ConnectionError:
-			case http2.GoAwayError:
-			case http2.StreamError:
-				reset = true
-			}
 		}
 		log.Printf("Client %v got error in io.Copy(conn, res.Body): %v", conn.RemoteAddr().String(), msg)
+		reset = true
 	}
 }
 
