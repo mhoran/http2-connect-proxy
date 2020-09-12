@@ -58,10 +58,10 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 
 func getLocalIP(host string) net.IP {
 	conn, err := net.Dial("udp", host)
-	defer conn.Close()
 	if err != nil {
 		return nil
 	}
+	defer conn.Close()
 	if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
 		return localAddr.IP
 	}
