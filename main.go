@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -76,22 +75,7 @@ func getRemotePort(conn net.Conn) int {
 	return 0
 }
 
-func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
-	reset := false
-	defer func() {
-		if reset {
-			// Set SO_LINGER to 0 to send RST on conn.Close()
-			if conn, ok := conn.(*net.TCPConn); ok {
-				conn.SetLinger(0)
-			}
-		}
-		conn.Close()
-	}()
-
-	pr, pw := io.Pipe()
-	var closePipe sync.Once
-	defer closePipe.Do(func() { pw.Close() })
-
+func copyProxy(url *url.URL, tr *http2.Transport, conn net.Conn, pr io.ReadCloser, done chan bool) {
 	req := &http.Request{
 		Method: "CONNECT",
 		URL:    url,
@@ -104,41 +88,15 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		log.Printf("Error in tr.RoundTrip: %v", err)
-		reset = true
+		done <- true
 		return
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		reset = true
+		done <- true
 		return
 	}
-
-	go func() {
-		defer closePipe.Do(func() { pw.Close() })
-		src := io.TeeReader(conn, &WriteCounter{
-			Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
-		})
-
-		// FIXME: remove when Envoy supports PROXY header
-		r := bufio.NewReader(src)
-
-		header := ""
-		localIP := getLocalIP(url.Host)
-		remotePort := getRemotePort(conn)
-
-		if localIP != nil && remotePort != 0 {
-			header = fmt.Sprintf("PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
-		}
-
-		// Block sending header until client sends data
-		_, err := r.Peek(1)
-		if err != nil {
-			return
-		}
-
-		io.Copy(pw, io.MultiReader(strings.NewReader(header), r))
-	}()
 
 	src := io.TeeReader(res.Body, &WriteCounter{
 		Message: fmt.Sprintf("Wrote %%d bytes to client %v\n", conn.RemoteAddr().String()),
@@ -150,8 +108,56 @@ func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 			msg = err.Error()
 		}
 		log.Printf("Client %v got error in io.Copy(conn, res.Body): %v", conn.RemoteAddr().String(), msg)
-		reset = true
+		done <- true
+		return
 	}
+	done <- false
+}
+
+func copyClient(url *url.URL, conn net.Conn, pw *io.PipeWriter, done chan bool) {
+	defer func() {
+		done <- false
+	}()
+	src := io.TeeReader(conn, &WriteCounter{
+		Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
+	})
+
+	// FIXME: remove when Envoy supports PROXY header
+	r := bufio.NewReader(src)
+
+	header := ""
+	localIP := getLocalIP(url.Host)
+	remotePort := getRemotePort(conn)
+
+	if localIP != nil && remotePort != 0 {
+		header = fmt.Sprintf("PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
+	}
+
+	// Block sending header until client sends data
+	_, err := r.Peek(1)
+	if err != nil {
+		return
+	}
+
+	io.Copy(pw, io.MultiReader(strings.NewReader(header), r))
+}
+
+func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
+	done := make(chan bool, 2)
+
+	pr, pw := io.Pipe()
+
+	go copyProxy(url, tr, conn, pr, done)
+	go copyClient(url, conn, pw, done)
+
+	reset := <-done
+	if reset {
+		if conn, ok := conn.(*net.TCPConn); ok {
+			conn.SetLinger(0)
+		}
+	}
+	conn.Close()
+	pw.Close()
 }
 
 func addKeyLogWriter(cfg *tls.Config) {
