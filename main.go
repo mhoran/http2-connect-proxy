@@ -75,7 +75,7 @@ func getRemotePort(conn net.Conn) int {
 	return 0
 }
 
-func copyProxy(url *url.URL, tr *http2.Transport, conn net.Conn, pr io.ReadCloser, done chan bool) {
+func copyProxy(url *url.URL, tr *http2.Transport, conn net.Conn, pr io.ReadCloser, done, doneError chan bool) {
 	req := &http.Request{
 		Method: "CONNECT",
 		URL:    url,
@@ -88,13 +88,13 @@ func copyProxy(url *url.URL, tr *http2.Transport, conn net.Conn, pr io.ReadClose
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		log.Printf("Error in tr.RoundTrip: %v", err)
-		done <- true
+		doneError <- true
 		return
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		done <- true
+		doneError <- true
 		return
 	}
 
@@ -108,15 +108,15 @@ func copyProxy(url *url.URL, tr *http2.Transport, conn net.Conn, pr io.ReadClose
 			msg = err.Error()
 		}
 		log.Printf("Client %v got error in io.Copy(conn, res.Body): %v", conn.RemoteAddr().String(), msg)
-		done <- true
+		doneError <- true
 		return
 	}
-	done <- false
+	done <- true
 }
 
 func copyClient(url *url.URL, conn net.Conn, pw *io.PipeWriter, done chan bool) {
 	defer func() {
-		done <- false
+		done <- true
 	}()
 	src := io.TeeReader(conn, &WriteCounter{
 		Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
@@ -144,14 +144,16 @@ func copyClient(url *url.URL, conn net.Conn, pw *io.PipeWriter, done chan bool) 
 
 func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
 	done := make(chan bool, 2)
+	doneError := make(chan bool, 1)
 
 	pr, pw := io.Pipe()
 
-	go copyProxy(url, tr, conn, pr, done)
+	go copyProxy(url, tr, conn, pr, done, doneError)
 	go copyClient(url, conn, pw, done)
 
-	reset := <-done
-	if reset {
+	select {
+	case <-done:
+	case <-doneError:
 		if conn, ok := conn.(*net.TCPConn); ok {
 			conn.SetLinger(0)
 		}
