@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -13,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -54,25 +52,6 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	n := len(p)
 	debugLog.Printf(wc.Message, n)
 	return n, nil
-}
-
-func getLocalIP(host string) net.IP {
-	conn, err := net.Dial("udp", host)
-	if err != nil {
-		return nil
-	}
-	defer conn.Close()
-	if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
-		return localAddr.IP
-	}
-	return nil
-}
-
-func getRemotePort(conn net.Conn) int {
-	if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-		return addr.Port
-	}
-	return 0
 }
 
 func copyProxy(url *url.URL, tr *http2.Transport, conn net.Conn, pr io.ReadCloser, done, doneError chan bool) {
@@ -122,24 +101,7 @@ func copyClient(url *url.URL, conn net.Conn, pw *io.PipeWriter, done chan bool) 
 		Message: fmt.Sprintf("Read %%d bytes from client %v\n", conn.RemoteAddr().String()),
 	})
 
-	// FIXME: remove when Envoy supports PROXY header
-	r := bufio.NewReader(src)
-
-	header := ""
-	localIP := getLocalIP(url.Host)
-	remotePort := getRemotePort(conn)
-
-	if localIP != nil && remotePort != 0 {
-		header = fmt.Sprintf("PROXY TCP4 %v 127.0.0.1 %v 3306\r\n", localIP, remotePort)
-	}
-
-	// Block sending header until client sends data
-	_, err := r.Peek(1)
-	if err != nil {
-		return
-	}
-
-	io.Copy(pw, io.MultiReader(strings.NewReader(header), r))
+	io.Copy(pw, src)
 }
 
 func handleConnection(url *url.URL, tr *http2.Transport, conn net.Conn) {
